@@ -9,9 +9,7 @@ from dotenv import load_dotenv
 import os
 import logging
 import time
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-import threading
+import tempfile
 
 # 환경 변수 로드
 load_dotenv()
@@ -24,239 +22,118 @@ logger = logging.getLogger(__name__)
 vector_store = None
 chain = None
 documents = []
-processing_lock = threading.Lock()
 
-class PDFHandler(FileSystemEventHandler):
-    def __init__(self):
-        self.last_processed = {}
-    
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith('.pdf'):
-            self.process_file(event.src_path)
-    
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith('.pdf'):
-            self.process_file(event.src_path)
-    
-    def process_file(self, file_path: str):
-        """PDF 파일을 처리합니다."""
-        global vector_store, chain, documents
-        
-        # 파일이 이미 처리되었는지 확인
-        current_time = os.path.getmtime(file_path)
-        if file_path in self.last_processed and self.last_processed[file_path] == current_time:
-            return
-        
-        with processing_lock:
-            try:
-                logger.info(f"처리 중인 파일: {file_path}")
-                
-                # PDF 로드
-                loader = PyPDFLoader(file_path)
-                new_documents = loader.load()
-                
-                # 텍스트 분할
-                text_splitter = CharacterTextSplitter(
-                    chunk_size=1000,
-                    chunk_overlap=0
-                )
-                texts = text_splitter.split_documents(new_documents)
-                
-                # 임베딩 생성
-                embeddings = OpenAIEmbeddings()
-                
-                # 벡터 저장소 생성 또는 업데이트
-                if vector_store is None:
-                    vector_store = Chroma.from_documents(
-                        documents=texts,
-                        embedding=embeddings,
-                        persist_directory="./chroma_db"
-                    )
-                else:
-                    vector_store.add_documents(texts)
-                
-                vector_store.persist()
-                
-                # 체인 초기화
-                retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-                prompt_template = PromptTemplate(
-                    input_variables=["context", "question"],
-                    template="""당신은 문서를 분석하는 유능한 직원입니다. 
-                    다음 규칙을 반드시 지켜주세요:
+def create_documents_folder():
+    """documents 폴더를 생성합니다."""
+    try:
+        if not os.path.exists("documents"):
+            os.makedirs("documents")
+            logger.info("documents 폴더가 생성되었습니다.")
+        return "documents 폴더가 준비되었습니다. PDF 파일을 업로드해주세요."
+    except Exception as e:
+        logger.error(f"폴더 생성 실패: {str(e)}")
+        return f"폴더 생성 중 오류 발생: {str(e)}"
 
-                    1. 모든 답변은 한글로만 작성합니다.
-                    2. 답변은 짧고 간결하게 작성합니다.
-                    3. 질문에 대한 답변이 문서에서 찾을 수 없는 경우 "질문한 내용에 관한 규정을 찾을 수 없습니다"라고 답변합니다.
-                    4. 문서의 내용을 정확하게 분석하여 답변합니다.
-                    5. 답변 시 반드시 문서의 내용을 근거로 제시합니다.
-                    
-                    컨텍스트:
-                    {context}
-                    
-                    질문: {question}
-                    
-                    답변:"""
-                )
-                
-                llm = ChatOpenAI(
-                    model_name="gpt-3.5-turbo",
-                    temperature=0
-                )
-                
-                chain = RetrievalQA.from_chain_type(
-                    llm=llm,
-                    chain_type="stuff",
-                    retriever=retriever,
-                    return_source_documents=True,
-                    chain_type_kwargs={
-                        "prompt": prompt_template
-                    }
-                )
-                
-                self.last_processed[file_path] = current_time
-                logger.info(f"파일 처리 완료: {file_path}")
-                
-            except Exception as e:
-                logger.error(f"파일 처리 실패: {str(e)}")
-
-def start_file_watcher():
-    """파일 감시를 시작합니다."""
-    documents_dir = "./documents"
-    if not os.path.exists(documents_dir):
-        os.makedirs(documents_dir)
-    
-    event_handler = PDFHandler()
-    observer = Observer()
-    observer.schedule(event_handler, documents_dir, recursive=False)
-    observer.start()
-    
-    # 기존 PDF 파일 처리
-    for file in os.listdir(documents_dir):
-        if file.endswith('.pdf'):
-            event_handler.process_file(os.path.join(documents_dir, file))
-    
-    return observer
-
-def initialize_chain(chunk_size: int = 1000, chunk_overlap: int = 0) -> str:
-    """체인을 초기화합니다."""
+def process_documents():
+    """문서를 처리합니다."""
     global vector_store, chain, documents
     
     try:
-        if not documents:
-            return "먼저 PDF 파일을 업로드해주세요."
+        # documents 폴더 생성 확인
+        if not os.path.exists("documents"):
+            return "먼저 documents 폴더를 생성해주세요."
         
-        # 텍스트 분할
-        text_splitter = CharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-        texts = text_splitter.split_documents(documents)
-        
-        # 임베딩 생성
-        embeddings = OpenAIEmbeddings()
-        
-        # 벡터 저장소 생성 또는 업데이트
-        if vector_store is None:
-            vector_store = Chroma.from_documents(
-                documents=texts,
-                embedding=embeddings,
-                persist_directory="./chroma_db"  # 영구 저장소 설정
+        # 임시 디렉토리 생성
+        with tempfile.TemporaryDirectory() as temp_dir:
+            documents_dir = os.path.join(temp_dir, "documents")
+            os.makedirs(documents_dir, exist_ok=True)
+            
+            # PDF 파일 처리
+            for file in os.listdir("documents"):
+                if file.endswith('.pdf'):
+                    try:
+                        src_path = os.path.join("documents", file)
+                        dst_path = os.path.join(documents_dir, file)
+                        
+                        # 파일 복사
+                        with open(src_path, 'rb') as src, open(dst_path, 'wb') as dst:
+                            dst.write(src.read())
+                        
+                        logger.info(f"처리 중인 파일: {file}")
+                        
+                        # PDF 로드
+                        loader = PyPDFLoader(dst_path)
+                        new_documents = loader.load()
+                        documents.extend(new_documents)
+                        
+                    except Exception as e:
+                        logger.error(f"파일 처리 실패 {file}: {str(e)}")
+                        continue
+            
+            if not documents:
+                return "처리할 PDF 파일이 없습니다."
+            
+            # 텍스트 분할
+            text_splitter = CharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=0
             )
-            vector_store.persist()  # 변경사항 저장
-        else:
-            vector_store.add_documents(texts)
-            vector_store.persist()  # 변경사항 저장
-        
-        # 검색기 생성
-        retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-        
-        # 프롬프트 템플릿 생성
-        prompt_template = PromptTemplate(
-            input_variables=["context", "question"],
-            template="""당신은 문서를 분석하는 유능한 직원입니다. 
-            다음 규칙을 반드시 지켜주세요:
+            texts = text_splitter.split_documents(documents)
+            
+            # 임베딩 생성
+            embeddings = OpenAIEmbeddings()
+            
+            # 벡터 저장소 생성 또는 업데이트
+            if vector_store is None:
+                vector_store = Chroma.from_documents(
+                    documents=texts,
+                    embedding=embeddings,
+                    persist_directory=os.path.join(temp_dir, "chroma_db")
+                )
+            else:
+                vector_store.add_documents(texts)
+            
+            # 체인 초기화
+            retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+            prompt_template = PromptTemplate(
+                input_variables=["context", "question"],
+                template="""당신은 문서를 분석하는 유능한 직원입니다. 
+                다음 규칙을 반드시 지켜주세요:
 
-            1. 모든 답변은 한글로만 작성합니다.
-            2. 답변은 짧고 간결하게 작성합니다.
-            3. 질문에 대한 답변이 문서에서 찾을 수 없는 경우 "질문한 내용에 관한 규정을 찾을 수 없습니다"라고 답변합니다.
-            4. 문서의 내용을 정확하게 분석하여 답변합니다.
-            5. 답변 시 반드시 문서의 내용을 근거로 제시합니다.
+                1. 모든 답변은 한글로만 작성합니다.
+                2. 답변은 짧고 간결하게 작성합니다.
+                3. 질문에 대한 답변이 문서에서 찾을 수 없는 경우 "질문한 내용에 관한 규정을 찾을 수 없습니다"라고 답변합니다.
+                4. 문서의 내용을 정확하게 분석하여 답변합니다.
+                5. 답변 시 반드시 문서의 내용을 근거로 제시합니다.
+                
+                컨텍스트:
+                {context}
+                
+                질문: {question}
+                
+                답변:"""
+            )
             
-            컨텍스트:
-            {context}
+            llm = ChatOpenAI(
+                model_name="gpt-3.5-turbo",
+                temperature=0
+            )
             
-            질문: {question}
+            chain = RetrievalQA.from_chain_type(
+                llm=llm,
+                chain_type="stuff",
+                retriever=retriever,
+                return_source_documents=True,
+                chain_type_kwargs={
+                    "prompt": prompt_template
+                }
+            )
             
-            답변:"""
-        )
-        
-        # LLM 초기화
-        llm = ChatOpenAI(
-            model_name="gpt-3.5-turbo",
-            temperature=0
-        )
-        
-        # 체인 초기화
-        chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            return_source_documents=True,
-            chain_type_kwargs={
-                "prompt": prompt_template
-            }
-        )
-        
-        return f"문서 처리 완료. 현재 문서 수: {len(documents)}"
+            return f"문서 처리 완료. 현재 문서 수: {len(documents)}"
+            
     except Exception as e:
-        logger.error(f"체인 초기화 실패: {str(e)}")
+        logger.error(f"문서 처리 실패: {str(e)}")
         return f"오류 발생: {str(e)}"
-
-def process_pdf(files, chunk_size, chunk_overlap):
-    """PDF 파일들을 처리하고 체인을 초기화합니다."""
-    if not files:
-        return "파일을 선택해주세요."
-    
-    try:
-        for file in files:
-            if not file.name.endswith('.pdf'):
-                return "PDF 파일만 업로드 가능합니다."
-            
-            # PDF 로드
-            loader = PyPDFLoader(file.name)
-            new_documents = loader.load()
-            documents.extend(new_documents)
-        
-        # 체인 초기화
-        return initialize_chain(chunk_size, chunk_overlap)
-    except Exception as e:
-        logger.error(f"파일 처리 실패: {str(e)}")
-        return f"파일 처리 중 오류 발생: {str(e)}"
-
-def add_document(files, chunk_size, chunk_overlap):
-    """기존 문서에 새로운 PDF 파일들을 추가합니다."""
-    if not files:
-        return "파일을 선택해주세요."
-    
-    try:
-        for file in files:
-            if not file.name.endswith('.pdf'):
-                return "PDF 파일만 업로드 가능합니다."
-            
-            # PDF 로드
-            loader = PyPDFLoader(file.name)
-            new_documents = loader.load()
-            documents.extend(new_documents)
-        
-        # 체인 초기화
-        return initialize_chain(chunk_size, chunk_overlap)
-    except Exception as e:
-        logger.error(f"문서 추가 실패: {str(e)}")
-        return f"문서 추가 중 오류 발생: {str(e)}"
 
 def clean_text(text: str) -> str:
     """텍스트를 정리하고 포맷팅합니다."""
@@ -323,11 +200,21 @@ with gr.Blocks(title="KNUH 칠곡 경북대학교병원 규정집 & 노동조합
     gr.Markdown("# KNUH 칠곡 경북대학교병원 규정집 & 노동조합 단체협약서 AI Agent")
     gr.Markdown("병원 규정집 노동조합 단체협약서 관련 질문을 해주세요")
     
-    chatbot = gr.Chatbot(height=400)
-    msg = gr.Textbox(label="질문")
     with gr.Row():
-        submit_button = gr.Button("전송")
-        clear_chat_button = gr.Button("채팅 초기화")
+        with gr.Column():
+            chatbot = gr.Chatbot(height=400)
+            msg = gr.Textbox(label="질문")
+            with gr.Row():
+                submit_button = gr.Button("전송")
+                clear_chat_button = gr.Button("채팅 초기화")
+        
+        with gr.Column():
+            gr.Markdown("### 문서 관리")
+            with gr.Row():
+                create_folder_button = gr.Button("폴더 생성")
+                process_button = gr.Button("문서 처리")
+                clear_docs_button = gr.Button("문서 초기화")
+            status = gr.Textbox(label="상태")
     
     submit_button.click(
         chat,
@@ -341,13 +228,21 @@ with gr.Blocks(title="KNUH 칠곡 경북대학교병원 규정집 & 노동조합
         clear_chat,
         outputs=chatbot
     )
+    
+    create_folder_button.click(
+        create_documents_folder,
+        outputs=status
+    )
+    
+    process_button.click(
+        process_documents,
+        outputs=status
+    )
+    
+    clear_docs_button.click(
+        clear_documents,
+        outputs=status
+    )
 
 if __name__ == "__main__":
-    # 파일 감시 시작
-    observer = start_file_watcher()
-    
-    try:
-        demo.launch(server_name="0.0.0.0", server_port=7860)
-    finally:
-        observer.stop()
-        observer.join() 
+    demo.launch(server_name="0.0.0.0", server_port=7860) 
