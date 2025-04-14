@@ -1,0 +1,8 @@
+title: KNUH 칠곡 경북대학교병원 규정집 & 노동조합 단체협약서 AI Agent
+emoji: 🤖
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: "4.0.0"
+app_file: app.py
+pinned: false 
