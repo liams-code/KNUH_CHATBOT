@@ -198,23 +198,18 @@ def clear_documents():
 # 사용자 인터페이스
 with gr.Blocks(title="KNUH 칠곡 경북대학교병원 규정집 & 노동조합 단체협약서 AI Agent") as demo:
     gr.Markdown("# KNUH 칠곡 경북대학교병원 규정집 & 노동조합 단체협약서 AI Agent")
-    gr.Markdown("병원 규정집 노동조합 단체협약서 관련 질문을 해주세요")
     
     with gr.Row():
-        with gr.Column():
-            chatbot = gr.Chatbot(height=400)
-            msg = gr.Textbox(label="질문")
-            with gr.Row():
-                submit_button = gr.Button("전송")
-                clear_chat_button = gr.Button("채팅 초기화")
-        
-        with gr.Column():
-            gr.Markdown("### 문서 관리")
-            with gr.Row():
-                create_folder_button = gr.Button("폴더 생성")
-                process_button = gr.Button("문서 처리")
-                clear_docs_button = gr.Button("문서 초기화")
-            status = gr.Textbox(label="상태")
+        gr.Markdown("병원 규정집 노동조합 단체협약서 관련 질문을 해주세요")
+        start_chat_button = gr.Button("채팅시작")
+    
+    status = gr.Textbox(label="상태")
+    
+    chatbot = gr.Chatbot(height=400)
+    msg = gr.Textbox(label="질문")
+    with gr.Row():
+        submit_button = gr.Button("전송")
+        clear_chat_button = gr.Button("채팅 초기화")
     
     submit_button.click(
         chat,
@@ -229,18 +224,8 @@ with gr.Blocks(title="KNUH 칠곡 경북대학교병원 규정집 & 노동조합
         outputs=chatbot
     )
     
-    create_folder_button.click(
-        create_documents_folder,
-        outputs=status
-    )
-    
-    process_button.click(
+    start_chat_button.click(
         process_documents,
-        outputs=status
-    )
-    
-    clear_docs_button.click(
-        clear_documents,
         outputs=status
     )
 
