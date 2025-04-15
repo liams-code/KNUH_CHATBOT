@@ -4,14 +4,14 @@ emoji: 🤖
 colorFrom: blue
 colorTo: green
 sdk: gradio
-sdk_version: "4.0.0"
+sdk_version: "5.25.1"
 app_file: app.py
 pinned: false
 ---
 
-# KNUH 칠곡 경북대학교병원 내규 및 노동조합 챗봇
+# KNUH 칠곡 경북대학교병원 규정집 & 노동조합 단체협약서 AI Agent
 
-병원 내규와 노동조합 관련 문서를 분석하고 질문에 답변하는 챗봇 시스템입니다.
+칠곡 경북대학교병원 규정집 & 노동조합 단체협약서를 분석하고 질문에 답변하는 챗봇 시스템입니다.
 
 ## 기능
 
